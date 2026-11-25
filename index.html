@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Recetas">
+<meta name="theme-color" content="#111111">
+<link rel="manifest" href="manifest.webmanifest">
+<title>Recetas</title>
+<style>
+  :root { --bg:#111; --card:#1d1d1f; --line:#2c2c2e; --tx:#f5f5f7; --mut:#8e8e93; --acc:#30d158; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--tx); font:17px/1.35 -apple-system,system-ui,sans-serif;
+         padding:env(safe-area-inset-top) 0 calc(24px + env(safe-area-inset-bottom)); }
+  header { padding:16px 16px 8px; }
+  h1 { font-size:26px; margin:0; }
+  .tabs { display:flex; gap:8px; padding:0 16px 12px; position:sticky; top:0; background:var(--bg); padding-top:8px; z-index:2; }
+  .tab { flex:1; padding:12px 0; border-radius:12px; border:1px solid var(--line); background:var(--card); color:var(--tx); font-size:16px; font-weight:600; }
+  .tab.on { background:var(--acc); border-color:var(--acc); color:#000; }
+  .card { background:var(--card); margin:0 12px 10px; border-radius:14px; overflow:hidden; }
+  .card.sel { outline:2px solid var(--acc); }
+  .rh { padding:14px 16px; display:flex; align-items:center; gap:10px; }
+  .rh .n { flex:1; font-weight:600; }
+  .rh .meta { color:var(--mut); font-size:13px; font-weight:400; display:block; margin-top:2px; }
+  .step { display:flex; align-items:center; gap:6px; }
+  .step button { width:40px; height:40px; border-radius:10px; border:1px solid var(--line); background:#000; color:var(--tx); font-size:22px; }
+  .step .q { min-width:22px; text-align:center; font-weight:700; color:var(--acc); }
+  .body { border-top:1px solid var(--line); padding:10px 16px 14px; display:none; font-size:15px; }
+  .card.open .body { display:block; }
+  .body ul { margin:0; padding-left:18px; }
+  .body .pasos { margin-top:10px; color:var(--mut); white-space:pre-line; }
+  .tienda { padding:14px 16px 6px; font-weight:700; font-size:19px; display:flex; justify-content:space-between; }
+  .tienda small { color:var(--mut); font-weight:400; font-size:14px; }
+  .item { display:flex; align-items:center; gap:12px; padding:12px 16px; border-top:1px solid var(--line); }
+  .item:first-child { border-top:0; }
+  .item .bx { width:26px; height:26px; border-radius:8px; border:2px solid var(--mut); flex:none; display:grid; place-items:center; color:#000; font-weight:800; }
+  .item.ok .bx { background:var(--acc); border-color:var(--acc); }
+  .item.ok .t { color:var(--mut); text-decoration:line-through; }
+  .item .t { flex:1; }
+  .item .c { color:var(--mut); font-size:15px; white-space:nowrap; }
+  .btn { display:block; width:calc(100% - 24px); margin:14px 12px; padding:15px; border-radius:14px; border:1px solid var(--line); font-size:17px; font-weight:700; background:var(--card); color:var(--tx); }
+  .empty { margin:20px 16px; color:var(--mut); }
+</style>
+</head>
+<body>
+<header><h1>Recetas</h1></header>
+<div class="tabs">
+  <button class="tab" data-v="recetas">Recetas</button>
+  <button class="tab" data-v="lista" id="tabLista">Lista</button>
+</div>
+<main id="main"></main>
+<script>
+// ===== DATOS: esto es lo único que se edita para sumar recetas o lugares =====
+
+// Lugares de compra, en el orden en que aparecen en la lista.
+const TIENDAS = ["Granja Benedetti", "Fruti Shop"];
+
+// Dónde se compra cada ingrediente (nombre en minúscula → tienda).
+// Lo que no esté acá cae en "Sin asignar". Una receta puede pisarlo con `donde`.
+const DONDE = {
+};
+
+// Recetas. Cada ingrediente: { item, cant, unidad }. `cant` puede faltar ("sal").
+// Mismo item + misma unidad se suman en la lista.
+const RECETAS = [
+];
+
+// ===== APP =====
+const KEY = "recetas-estado";
+const SIN = "Sin asignar";
+let st = JSON.parse(localStorage.getItem(KEY) || "{}");
+st.sel ||= {}; st.ok ||= {}; st.vista ||= "recetas";
+const save = () => localStorage.setItem(KEY, JSON.stringify(st));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+const num = n => Number.isInteger(n) ? n : n.toLocaleString("es-AR", { maximumFractionDigits:2 });
+const cantTxt = i => i.cant == null ? "" : `${num(i.cant)} ${i.unidad || ""}`.trim();
+const open = new Set();
+
+// Saca de la selección recetas que ya no existen (renombradas o borradas).
+for (const n of Object.keys(st.sel)) if (!RECETAS.some(r => r.nombre === n)) delete st.sel[n];
+
+function lista() {
+  const m = new Map();
+  for (const r of RECETAS) {
+    const x = st.sel[r.nombre]; if (!x) continue;
+    for (const i of r.ingredientes) {
+      const tienda = i.donde || DONDE[i.item.toLowerCase()] || SIN;
+      const k = `${tienda}|${i.item.toLowerCase()}|${i.unidad || ""}`;
+      const e = m.get(k) || { k, tienda, item:i.item, unidad:i.unidad, cant:null, de:new Set() };
+      if (i.cant != null) e.cant = (e.cant || 0) + i.cant * x;
+      e.de.add(r.nombre); m.set(k, e);
+    }
+  }
+  const orden = [...TIENDAS, SIN];
+  const grupos = {};
+  for (const e of m.values()) (grupos[e.tienda] ||= []).push(e);
+  return Object.keys(grupos).sort((a, b) => (orden.indexOf(a) + 1 || 99) - (orden.indexOf(b) + 1 || 99))
+    .map(t => ({ t, items: grupos[t].sort((a, b) => a.item.localeCompare(b.item, "es")) }));
+}
+
+function render() {
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("on", b.dataset.v === st.vista));
+  const nSel = Object.values(st.sel).reduce((a, b) => a + b, 0);
+  document.getElementById("tabLista").textContent = nSel ? `Lista (${nSel})` : "Lista";
+  const M = document.getElementById("main");
+
+  if (st.vista === "recetas") {
+    if (!RECETAS.length) { M.innerHTML = `<p class="empty">Todavía no hay recetas. Pasáselas a Claude y las suma.</p>`; return; }
+    M.innerHTML = RECETAS.map((r, ix) => {
+      const q = st.sel[r.nombre] || 0;
+      return `<div class="card ${q ? "sel" : ""} ${open.has(ix) ? "open" : ""}">
+        <div class="rh" data-open="${ix}">
+          <span class="n">${esc(r.nombre)}<span class="meta">${r.ingredientes.length} ingredientes${r.porciones ? ` · ${r.porciones} porciones` : ""}</span></span>
+          <span class="step"><button data-menos="${ix}">−</button><span class="q">${q || ""}</span><button data-mas="${ix}">+</button></span>
+        </div>
+        <div class="body"><ul>${r.ingredientes.map(i => `<li>${esc(i.item)}${cantTxt(i) ? ` — ${esc(cantTxt(i))}` : ""}</li>`).join("")}</ul>
+        ${r.pasos ? `<div class="pasos">${esc(r.pasos)}</div>` : ""}</div>
+      </div>`;
+    }).join("");
+    return;
+  }
+
+  const g = lista();
+  if (!g.length) { M.innerHTML = `<p class="empty">Elegí recetas con el + y acá aparece la lista, separada por lugar.</p>`; return; }
+  M.innerHTML = g.map(({ t, items }) => {
+    const hechos = items.filter(e => st.ok[e.k]).length;
+    items.sort((a, b) => !!st.ok[a.k] - !!st.ok[b.k]);
+    return `<div class="tienda">${esc(t)}<small>${hechos}/${items.length}</small></div>
+      <div class="card">${items.map(e => `<div class="item ${st.ok[e.k] ? "ok" : ""}" data-k="${esc(e.k)}">
+        <span class="bx">${st.ok[e.k] ? "✓" : ""}</span><span class="t">${esc(e.item)}</span>
+        <span class="c">${esc(cantTxt(e))}</span></div>`).join("")}</div>`;
+  }).join("") + `<button class="btn" id="nueva">Nueva compra (vaciar todo)</button>`;
+}
+
+document.addEventListener("click", ev => {
+  const el = ev.target.closest("[data-v],[data-mas],[data-menos],[data-open],[data-k],#nueva");
+  if (!el) return;
+  const d = el.dataset;
+  if (d.v) st.vista = d.v;
+  else if (d.mas || d.menos) {
+    const n = RECETAS[+(d.mas || d.menos)].nombre;
+    st.sel[n] = Math.max(0, (st.sel[n] || 0) + (d.mas ? 1 : -1));
+    if (!st.sel[n]) delete st.sel[n];
+  }
+  else if (d.open) { const i = +d.open; open.has(i) ? open.delete(i) : open.add(i); }
+  else if (d.k) { st.ok[d.k] ? delete st.ok[d.k] : st.ok[d.k] = true; }
+  else if (el.id === "nueva") { if (!confirm("Vaciar recetas elegidas y tildes?")) return; st.sel = {}; st.ok = {}; }
+  save(); render();
+});
+
+render();
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+</script>
+</body>
+</html>
